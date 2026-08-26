@@ -1,0 +1,113 @@
+groups:
+  - name: cln-exporter
+    rules:
+      - alert: ClnExporterDown
+        expr: up{job="cln"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: CLN exporter is unreachable
+
+      - alert: ClnCollectorFailing
+        expr: cln_exporter_collector_success == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CLN collector {{ $labels.collector }} is failing"
+
+      - alert: ClnBitcoinNotSynced
+        expr: cln_node_bitcoin_synced == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: CLN's Bitcoin backend is not synchronized
+
+      - alert: ClnChannelDisconnected
+        expr: cln_channel_connected == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Channel {{ $labels.channel }} is disconnected"
+
+      - alert: ClnChannelLiquidityShortfall
+        expr: cln_channel_outbound_liquidity_shortfall_msat > 0 or cln_channel_inbound_liquidity_shortfall_msat > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Channel {{ $labels.channel }} is below its liquidity target"
+
+      - alert: ClnWarningBurst
+        expr: sum(increase(cln_warnings_total[5m])) > 5
+        labels:
+          severity: warning
+        annotations:
+          summary: CLN emitted multiple warnings or errors
+
+      - alert: ClnTrackerUnhealthy
+        expr: cln_tracker_healthy == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Tracker or bwatch is unhealthy
+
+
+      - alert: ClnPeerFlapping
+        expr: increase(cln_peer_disconnects_total[15m]) >= 3
+        labels:
+          severity: warning
+        annotations:
+          summary: "Peer {{ $labels.peer }} is repeatedly disconnecting"
+
+      - alert: ClnHtlcNearExpiry
+        expr: cln_channel_htlcs_near_expiry > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Channel {{ $labels.channel }} has an HTLC near expiry"
+
+      - alert: ClnAnchorTankShortfall
+        expr: cln_anchor_tank_shortfall_msat > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Confirmed wallet funds may not cover anchor-channel emergencies
+
+      - alert: ClnChannelFeerateUnacceptable
+        expr: cln_channel_feerate_acceptable == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Channel {{ $labels.channel }} commitment feerate is outside the acceptable range"
+
+      - alert: ClnSpliceStalled
+        expr: cln_channel_splice_inflight > 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Channel {{ $labels.channel }} has a long-running splice candidate"
+
+      - alert: ClnSendpayFailureRate
+        expr: sum(rate(cln_sendpay_attempts_total{outcome="failure"}[15m])) / clamp_min(sum(rate(cln_sendpay_attempts_total[15m])), 0.001) > 0.25
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: More than 25% of outgoing payment attempts are failing
+
+      - alert: ClnBackupPluginInactive
+        expr: cln_backup_plugin_active == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: The CLN backup plugin is not active

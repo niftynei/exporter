@@ -1,0 +1,25 @@
+[package]
+name = "cln-exporter"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Production-oriented Prometheus exporter plugin for Core Lightning"
+
+[dependencies]
+anyhow = "1.0"
+axum = "0.8"
+cln-plugin = "0.7.0"
+cln-rpc = "0.7.0"
+futures = "0.3"
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.47", features = ["macros", "net", "rt", "sync", "time"] }
+
+[dev-dependencies]
+pretty_assertions = "1.4"
+
+[profile.release]
+lto = "thin"
+strip = "debuginfo"
