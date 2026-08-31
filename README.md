@@ -44,6 +44,9 @@ history-rpc-timeout=10
 
 The plugin provides read-only dashboard RPCs:
 
+- `history-metrics`: bounded storage, collection-health, coverage, and row-count
+  metrics automatically discovered by `cln-exporter` and exposed with the
+  `cln_history_` prefix.
 - `cln-history-status`: database health, coverage, and row counts.
 - `cln-history-channels`: channel balance, connectivity, and availability
   change points. The most recent point before the requested range is included

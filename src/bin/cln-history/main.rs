@@ -48,6 +48,10 @@ async fn history_status(plugin: Plugin<HistoryState>, _params: Value) -> Result<
     plugin.state().db.status()
 }
 
+async fn history_metrics(plugin: Plugin<HistoryState>, _params: Value) -> Result<Value, Error> {
+    plugin.state().db.metrics()
+}
+
 async fn history_channels(plugin: Plugin<HistoryState>, params: Value) -> Result<Value, Error> {
     let query = RangeQuery::parse(params)?;
     plugin.state().db.channel_samples(&query)
@@ -121,6 +125,10 @@ async fn main() -> Result<()> {
         .rpcmethod_from_builder(
             RpcMethodBuilder::new("cln-history-status", history_status)
                 .description("Show cln-history health, coverage, and storage statistics"),
+        )
+        .rpcmethod_from_builder(
+            RpcMethodBuilder::new("history-metrics", history_metrics)
+                .description("Return bounded cln-history metrics for Prometheus exporters"),
         )
         .rpcmethod_from_builder(
             RpcMethodBuilder::new("cln-history-channels", history_channels)

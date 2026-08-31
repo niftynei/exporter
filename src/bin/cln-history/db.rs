@@ -363,7 +363,9 @@ impl HistoryDb {
         Ok(json!({
             "schema_version": SCHEMA_VERSION,
             "database": self.path.display().to_string(),
-            "database_bytes": fs::metadata(&self.path).map(|metadata| metadata.len()).unwrap_or(0),
+            "database_bytes": file_bytes(&self.path),
+            "wal_bytes": file_bytes(&sidecar_path(&self.path, "-wal")),
+            "storage_bytes": storage_bytes(&self.path),
             "retention_days": self.retention_seconds / 86_400,
             "change_only": true,
             "checkpoint_seconds": CHECKPOINT_SECONDS,
@@ -376,6 +378,63 @@ impl HistoryDb {
                 "channel_events": count(&connection, "channel_events")?,
                 "forward_pair_buckets": count(&connection, "forward_pair_buckets")?,
             }
+        }))
+    }
+
+    pub fn metrics(&self) -> Result<Value> {
+        let connection = self.connection()?;
+        let (oldest_success, newest_success): (Option<i64>, Option<i64>) = connection.query_row(
+            "SELECT MIN(ts), MAX(ts) FROM collector_runs WHERE success = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let last_success = newest_success.unwrap_or(0);
+        let last_run = connection
+            .query_row(
+                "SELECT ts, success FROM collector_runs ORDER BY ts DESC LIMIT 1",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, bool>(1)?)),
+            )
+            .optional()?;
+        let (last_collection, collection_success) = last_run
+            .map(|(timestamp, success)| (timestamp, i64::from(success)))
+            .unwrap_or((0, 0));
+        let now = to_i64(crate::model::now())?;
+        let collection_age = if last_success > 0 {
+            now.saturating_sub(last_success)
+        } else {
+            0
+        };
+        let coverage = match (oldest_success, newest_success) {
+            (Some(oldest), Some(newest)) => newest.saturating_sub(oldest),
+            _ => 0,
+        };
+        let page_count = pragma_i64(&connection, "page_count")?;
+        let freelist_count = pragma_i64(&connection, "freelist_count")?;
+        Ok(json!({
+            "version": 1,
+            "namespace": "history",
+            "families": [
+                gauge("database_bytes", "Size of the main cln-history SQLite database file in bytes.", file_bytes(&self.path)),
+                gauge("wal_bytes", "Size of the cln-history SQLite write-ahead log in bytes.", file_bytes(&sidecar_path(&self.path, "-wal"))),
+                gauge("storage_bytes", "Total cln-history SQLite database, WAL, and shared-memory disk usage in bytes.", storage_bytes(&self.path)),
+                gauge("database_pages", "Number of pages in the cln-history SQLite database.", page_count),
+                gauge("database_freelist_pages", "Number of unused pages in the cln-history SQLite database.", freelist_count),
+                gauge("channels", "Number of channels known to cln-history.", count(&connection, "channels")?),
+                gauge("active_channels", "Number of channels present in the latest cln-history snapshot.", count_where(&connection, "channels", "disappeared_at IS NULL")?),
+                gauge("disappeared_channels", "Number of historical channels absent from the latest cln-history snapshot.", count_where(&connection, "channels", "disappeared_at IS NOT NULL")?),
+                gauge("channel_samples", "Number of retained channel liquidity change points and checkpoints.", count(&connection, "channel_samples")?),
+                gauge("channel_events", "Number of retained channel lifecycle and state events.", count(&connection, "channel_events")?),
+                gauge("forward_pair_buckets", "Number of retained forwarding channel-pair buckets.", count(&connection, "forward_pair_buckets")?),
+                gauge("collector_runs", "Number of retained cln-history collection attempts.", count(&connection, "collector_runs")?),
+                gauge("retained_collection_failures", "Number of failed collection attempts in the retention window.", count_where(&connection, "collector_runs", "success = 0")?),
+                gauge("collection_success", "Whether the most recent cln-history collection attempt succeeded.", collection_success),
+                gauge("last_collection_timestamp_seconds", "Unix timestamp of the most recent cln-history collection attempt.", last_collection),
+                gauge("last_successful_collection_timestamp_seconds", "Unix timestamp of the most recent successful cln-history collection.", last_success),
+                gauge("last_successful_collection_age_seconds", "Age of the most recent successful cln-history collection in seconds.", collection_age),
+                gauge("history_coverage_seconds", "Elapsed time covered by retained successful cln-history collections.", coverage),
+                gauge("retention_seconds", "Configured cln-history retention window in seconds.", self.retention_seconds),
+            ]
         }))
     }
 
@@ -669,6 +728,43 @@ fn count(connection: &Connection, table: &str) -> Result<i64> {
     Ok(connection.query_row(&sql, [], |row| row.get(0))?)
 }
 
+fn count_where(connection: &Connection, table: &str, condition: &str) -> Result<i64> {
+    let sql = format!("SELECT COUNT(*) FROM {table} WHERE {condition}");
+    Ok(connection.query_row(&sql, [], |row| row.get(0))?)
+}
+
+fn pragma_i64(connection: &Connection, pragma: &str) -> Result<i64> {
+    let sql = format!("PRAGMA {pragma}");
+    Ok(connection.query_row(&sql, [], |row| row.get(0))?)
+}
+
+fn gauge(name: &str, help: &str, value: impl serde::Serialize) -> Value {
+    json!({
+        "name": name,
+        "help": help,
+        "type": "gauge",
+        "samples": [{"value": value}],
+    })
+}
+
+fn sidecar_path(path: &std::path::Path, suffix: &str) -> PathBuf {
+    let mut value = path.as_os_str().to_os_string();
+    value.push(suffix);
+    PathBuf::from(value)
+}
+
+fn file_bytes(path: &std::path::Path) -> u64 {
+    fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
+}
+
+fn storage_bytes(path: &std::path::Path) -> u64 {
+    file_bytes(path)
+        .saturating_add(file_bytes(&sidecar_path(path, "-wal")))
+        .saturating_add(file_bytes(&sidecar_path(path, "-shm")))
+}
+
 fn text(value: &Value, fields: &[&str]) -> Option<String> {
     fields
         .iter()
@@ -770,5 +866,38 @@ mod tests {
             .unwrap();
         let status = database.status().unwrap();
         assert_eq!(status["counts"]["channel_events"], 2);
+    }
+
+    #[test]
+    fn metrics_report_storage_rows_and_collection_health() {
+        let (_directory, database) = database();
+        database
+            .record_channel_snapshot(1_000, &channels(600_000))
+            .unwrap();
+        database
+            .record_collection_failure(1_300, &anyhow::anyhow!("test failure"))
+            .unwrap();
+        let metrics = database.metrics().unwrap();
+        assert_eq!(metrics["version"], 1);
+        assert_eq!(metrics["namespace"], "history");
+        let families = metrics["families"].as_array().unwrap();
+        let values = families
+            .iter()
+            .map(|family| {
+                (
+                    family["name"].as_str().unwrap(),
+                    family["samples"][0]["value"].clone(),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        assert!(values["database_bytes"].as_u64().unwrap() > 0);
+        assert_eq!(values["channels"], 1);
+        assert_eq!(values["channel_samples"], 1);
+        assert_eq!(values["retained_collection_failures"], 1);
+        assert_eq!(values["collection_success"], 0);
+        assert_eq!(
+            values["last_successful_collection_timestamp_seconds"],
+            1_000
+        );
     }
 }
