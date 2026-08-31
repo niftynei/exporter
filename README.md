@@ -10,13 +10,57 @@ Bookkeeper, remain portless and are queried through CLN's RPC interface.
 nix build
 ~~~
 
-The binary is available at `result/bin/cln-exporter`. A development shell is
-also included:
+The package contains `result/bin/cln-exporter` and `result/bin/cln-history`. A
+development shell is also included:
 
 ~~~console
 nix develop
 cargo test
 cargo clippy --all-targets -- -D warnings
+~~~
+
+## Lightweight history plugin
+
+`cln-history` keeps compact channel history on the CLN node for dashboard
+clients that connect over the existing CLN RPC or Commando connection. It does
+not require Prometheus. Channel liquidity and pending-HTLC aggregates are
+recorded when they change, with an hourly checkpoint; forwarding results are
+stored in five-minute channel-pair buckets. The default retention is 730 days.
+
+The SQLite database uses WAL mode and defaults to `cln-history.sqlite3` beside
+the node's RPC file. It stores channel and peer identifiers, aggregate amounts,
+states, and failure causes. It does not store payment hashes, preimages,
+invoices, or raw notification payloads.
+
+Add the plugin to the CLN configuration:
+
+~~~text
+plugin=/absolute/path/to/exporter/result/bin/cln-history
+history-db-file=cln-history.sqlite3
+history-sample-interval=300
+history-retention-days=730
+history-rpc-timeout=10
+~~~
+
+The plugin provides read-only dashboard RPCs:
+
+- `cln-history-status`: database health, coverage, and row counts.
+- `cln-history-channels`: channel balance, connectivity, and availability
+  change points. The most recent point before the requested range is included
+  as a baseline.
+- `cln-history-pairs`: forwarding count, volume, fees, and effective ppm by
+  incoming/outgoing channel pair and requested time interval.
+- `cln-history-htlcs`: historical per-channel pending-HTLC counts and amounts.
+- `cln-history-events`: channel state changes, disappearance, and reappearance.
+
+All query RPCs accept Unix-second `start` and `end` bounds plus an optional
+`limit` (10,000 by default, 50,000 maximum). For example:
+
+~~~console
+lightning-cli cln-history-status
+lightning-cli -k cln-history-channels start=1754006400 channel=1x2x3
+lightning-cli -k cln-history-pairs start=1754006400 interval=86400 min_ppm=100
+lightning-cli -k cln-history-events start=1754006400 event_type=state_changed
 ~~~
 
 ## Configuration

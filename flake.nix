@@ -26,6 +26,11 @@
           program = "${self.packages.${system}.default}/bin/cln-exporter";
           meta.description = "Export bounded-cardinality CLN metrics for Prometheus";
         };
+        history = {
+          type = "app";
+          program = "${self.packages.${system}.default}/bin/cln-history";
+          meta.description = "Store compact CLN channel history for RPC clients";
+        };
       });
 
       devShells = forAllSystems (system:
