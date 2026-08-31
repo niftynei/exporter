@@ -56,6 +56,13 @@ groups:
         annotations:
           summary: Tracker or bwatch is unhealthy
 
+      - alert: ClnTrackerHistoricalRescanStalled
+        expr: cln_tracker_bwatch_active_rescans > 0 and changes(cln_tracker_bwatch_rescan_blocks_processed[15m]) == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A Tracker historical bwatch rescan has made no progress for 15 minutes
 
       - alert: ClnPeerFlapping
         expr: increase(cln_peer_disconnects_total[15m]) >= 3

@@ -275,6 +275,37 @@
     {
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
+      "id": 43,
+      "panels": [],
+      "title": "Tracker Historical Rescans",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }] } }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 12, "x": 0, "y": 32 },
+      "id": 44,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [
+        { "expr": "cln_tracker_bwatch_active_rescans{node=\"$node\"}", "instant": true, "legendFormat": "Active scans", "refId": "A" },
+        { "expr": "cln_tracker_bwatch_rescan_blocks_total{node=\"$node\"} - cln_tracker_bwatch_rescan_blocks_processed{node=\"$node\"}", "instant": true, "legendFormat": "Blocks remaining", "refId": "B" }
+      ],
+      "title": "Active Rescans",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "color": { "mode": "continuous-RdYlGr" }, "decimals": 1, "max": 1, "min": 0, "unit": "percentunit" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 32 },
+      "id": 45,
+      "options": { "displayMode": "gradient", "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }, "minVizHeight": 10, "minVizWidth": 0, "namePlacement": "auto", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showUnfilled": true, "sizing": "auto", "valueMode": "color" },
+      "targets": [{ "expr": "cln_tracker_bwatch_rescan_progress_ratio{node=\"$node\"}", "instant": true, "legendFormat": "Progress", "refId": "A" }],
+      "title": "Aggregate Rescan Progress",
+      "type": "bargauge"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
       "id": 40,
       "panels": [],
       "title": "Collector Diagnostics",
@@ -283,7 +314,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "decimals": 0, "mappings": [{ "options": { "0": { "color": "red", "text": "FAILED" }, "1": { "color": "green", "text": "OK" } }, "type": "value" }], "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] } }, "overrides": [] },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 32 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 37 },
       "id": 41,
       "options": { "displayMode": "basic", "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }, "minVizHeight": 10, "minVizWidth": 0, "namePlacement": "auto", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showUnfilled": true, "sizing": "auto", "valueMode": "color" },
       "targets": [{ "expr": "cln_exporter_collector_success{node=\"$node\"}", "instant": true, "legendFormat": "{{collector}}", "refId": "A" }],
@@ -293,7 +324,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "decimals": 3, "unit": "s" }, "overrides": [] },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 32 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 37 },
       "id": 42,
       "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [{ "expr": "cln_exporter_collector_duration_seconds{node=\"$node\"}", "legendFormat": "{{collector}}", "refId": "A" }],

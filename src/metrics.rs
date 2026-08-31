@@ -664,6 +664,40 @@ fn collect_tracker(metrics: &mut Metrics, value: &Value) {
         &[],
         number(value, "/bwatch/lag"),
     );
+    let active_rescans = value
+        .pointer("/bwatch/active_rescans")
+        .and_then(Value::as_array);
+    let rescan_count = active_rescans.map_or(0, Vec::len);
+    let rescan_blocks_processed = active_rescans
+        .into_iter()
+        .flatten()
+        .filter_map(|rescan| rescan.get("blocks_processed").and_then(Value::as_u64))
+        .sum::<u64>();
+    let rescan_blocks_total = active_rescans
+        .into_iter()
+        .flatten()
+        .filter_map(|rescan| rescan.get("blocks_total").and_then(Value::as_u64))
+        .sum::<u64>();
+    metrics.sample("cln_tracker_bwatch_active_rescans", &[], rescan_count);
+    metrics.sample(
+        "cln_tracker_bwatch_rescan_blocks_processed",
+        &[],
+        rescan_blocks_processed,
+    );
+    metrics.sample(
+        "cln_tracker_bwatch_rescan_blocks_total",
+        &[],
+        rescan_blocks_total,
+    );
+    metrics.sample(
+        "cln_tracker_bwatch_rescan_progress_ratio",
+        &[],
+        if rescan_blocks_total == 0 {
+            0.0
+        } else {
+            rescan_blocks_processed as f64 / rescan_blocks_total as f64
+        },
+    );
     for (metric, field) in [
         (
             "cln_tracker_reconciliation_failures_total",
@@ -1098,8 +1132,8 @@ pub async fn render(state: &AppState) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Metrics, collect_anchor_tank, collect_channels, escape_label, msat, percentage_ratio,
-        render_plugin_metrics,
+        Metrics, collect_anchor_tank, collect_channels, collect_tracker, escape_label, msat,
+        percentage_ratio, render_plugin_metrics,
     };
     use serde_json::json;
 
@@ -1213,5 +1247,41 @@ mod tests {
         render_plugin_metrics(&mut metrics, &plugin).unwrap();
         assert!(metrics.output.contains("cln_tracker_healthy 1"));
         assert!(render_plugin_metrics(&mut metrics, &plugin).is_err());
+    }
+
+    #[test]
+    fn tracker_fallback_includes_aggregate_rescan_progress() {
+        let health = json!({
+            "healthy": true,
+            "bwatch": {
+                "active_rescans": [
+                    {"blocks_processed": 25, "blocks_total": 100},
+                    {"blocks_processed": 50, "blocks_total": 100}
+                ]
+            }
+        });
+        let mut metrics = Metrics::default();
+        collect_tracker(&mut metrics, &health);
+
+        assert!(
+            metrics
+                .output
+                .contains("cln_tracker_bwatch_active_rescans 2")
+        );
+        assert!(
+            metrics
+                .output
+                .contains("cln_tracker_bwatch_rescan_blocks_processed 75")
+        );
+        assert!(
+            metrics
+                .output
+                .contains("cln_tracker_bwatch_rescan_blocks_total 200")
+        );
+        assert!(
+            metrics
+                .output
+                .contains("cln_tracker_bwatch_rescan_progress_ratio 0.375")
+        );
     }
 }

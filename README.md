@@ -146,9 +146,10 @@ to the internet.
 - Incoming invoice creation/payment totals and observed payment latency, plus
   outgoing sendpay success/failure and latency.
 - Installed plugin active/dynamic state.
-- Tracker health, descriptor lifecycle, incidents, bwatch lag and process-lifetime
-  failure counters through the automatically discovered `tracker-metrics` RPC.
-  The older `tracker-health` adapter remains as a compatibility fallback.
+- Tracker health, descriptor lifecycle, incidents, bwatch lag, active historical
+  rescan progress and process-lifetime failure counters through the automatically
+  discovered `tracker-metrics` RPC. The older `tracker-health` adapter remains
+  as a compatibility fallback.
 - Bookkeeper account balances when `bkpr-listbalances` is available.
 - Warning/error, plugin lifecycle, channel state transition, forwarding,
   coin-movement and generic notification counters from CLN's event stream.
