@@ -8,7 +8,7 @@ use cln_plugin::{
     options::{DefaultIntegerConfigOption, DefaultStringConfigOption},
 };
 use db::HistoryDb;
-use model::{EventQuery, PairQuery, RangeQuery, now};
+use model::{EventQuery, PairQuery, SampleQuery, now};
 use serde_json::{Value, json};
 use std::{path::PathBuf, time::Duration};
 
@@ -53,7 +53,7 @@ async fn history_metrics(plugin: Plugin<HistoryState>, _params: Value) -> Result
 }
 
 async fn history_channels(plugin: Plugin<HistoryState>, params: Value) -> Result<Value, Error> {
-    let query = RangeQuery::parse(params)?;
+    let query = SampleQuery::parse(params)?;
     plugin.state().db.channel_samples(&query)
 }
 
@@ -68,7 +68,7 @@ async fn history_events(plugin: Plugin<HistoryState>, params: Value) -> Result<V
 }
 
 async fn history_htlcs(plugin: Plugin<HistoryState>, params: Value) -> Result<Value, Error> {
-    let query = RangeQuery::parse(params)?;
+    let query = SampleQuery::parse(params)?;
     plugin.state().db.htlc_samples(&query)
 }
 
@@ -133,22 +133,22 @@ async fn main() -> Result<()> {
         .rpcmethod_from_builder(
             RpcMethodBuilder::new("cln-history-channels", history_channels)
                 .description("Return channel balance and availability change points")
-                .usage("[start] [end] [channel] [limit]"),
+                .usage("[start] [end] [channel] [limit] [cursor] [interval]"),
         )
         .rpcmethod_from_builder(
             RpcMethodBuilder::new("cln-history-pairs", history_pairs)
                 .description("Return aggregated forwarding results by incoming/outgoing channel pair")
-                .usage("[start] [end] [interval] [in_channel] [out_channel] [min_ppm] [max_ppm] [limit]"),
+                .usage("[start] [end] [interval] [in_channel] [out_channel] [min_ppm] [max_ppm] [limit] [cursor]"),
         )
         .rpcmethod_from_builder(
             RpcMethodBuilder::new("cln-history-htlcs", history_htlcs)
                 .description("Return historical pending-HTLC channel aggregates")
-                .usage("[start] [end] [channel] [limit]"),
+                .usage("[start] [end] [channel] [limit] [cursor] [interval]"),
         )
         .rpcmethod_from_builder(
             RpcMethodBuilder::new("cln-history-events", history_events)
                 .description("Return channel lifecycle and state-transition events")
-                .usage("[start] [end] [channel] [event_type] [limit]"),
+                .usage("[start] [end] [channel] [event_type] [limit] [cursor]"),
         )
         .subscribe("*", on_notification)
         .dynamic()

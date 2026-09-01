@@ -50,18 +50,33 @@ The plugin provides read-only dashboard RPCs:
 - `cln-history-status`: database health, coverage, and row counts.
 - `cln-history-channels`: channel balance, connectivity, and availability
   change points. The most recent point before the requested range is included
-  as a baseline.
+  as a baseline. Set `interval` to return the last state in each time bucket.
 - `cln-history-pairs`: forwarding count, volume, fees, and effective ppm by
   incoming/outgoing channel pair and requested time interval.
 - `cln-history-htlcs`: historical per-channel pending-HTLC counts and amounts.
 - `cln-history-events`: channel state changes, disappearance, and reappearance.
 
 All query RPCs accept Unix-second `start` and `end` bounds plus an optional
-`limit` (10,000 by default, 50,000 maximum). For example:
+`limit` (10,000 by default, 50,000 maximum). List responses include
+`pagination.has_more` and `pagination.next_cursor`; pass the returned cursor to
+fetch the next page. Channel and HTLC queries accept `interval` between 60
+seconds and one year. Forward-pair queries use the same field for their
+aggregation interval.
+
+Each channel has a durable `channel_identity`. The plugin records its channel
+IDs, public SCIDs, and local/remote aliases with first/last-seen timestamps.
+When an identifier changes during a splice, any surviving alias keeps the same
+identity. It deliberately does not merge channels based only on peer ID, since
+a peer may have multiple channels. Pair results include identity details for
+both sides.
+
+History begins when the plugin starts; it does not backfill older CLN or
+Bookkeeper records. For example:
 
 ~~~console
 lightning-cli cln-history-status
-lightning-cli -k cln-history-channels start=1754006400 channel=1x2x3
+lightning-cli -k cln-history-channels start=1754006400 channel=1x2x3 interval=3600 limit=1000
+lightning-cli -k cln-history-channels start=1754006400 cursor=1234 interval=3600 limit=1000
 lightning-cli -k cln-history-pairs start=1754006400 interval=86400 min_ppm=100
 lightning-cli -k cln-history-events start=1754006400 event_type=state_changed
 ~~~

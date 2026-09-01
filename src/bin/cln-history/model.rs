@@ -13,8 +13,15 @@ pub fn now() -> u64 {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct ChannelAlias {
+    pub kind: &'static str,
+    pub value: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct ChannelSample {
     pub channel_key: String,
+    pub aliases: Vec<ChannelAlias>,
     pub channel_id: Option<String>,
     pub short_channel_id: Option<String>,
     pub peer_id: String,
@@ -29,6 +36,26 @@ pub struct ChannelSample {
     pub htlc_out_count: u64,
     pub htlc_in_msat: u64,
     pub htlc_out_msat: u64,
+}
+
+impl PartialEq for ChannelSample {
+    fn eq(&self, other: &Self) -> bool {
+        self.channel_key == other.channel_key
+            && self.channel_id == other.channel_id
+            && self.short_channel_id == other.short_channel_id
+            && self.peer_id == other.peer_id
+            && self.state == other.state
+            && self.connected == other.connected
+            && self.reestablished == other.reestablished
+            && self.capacity_msat == other.capacity_msat
+            && self.to_us_msat == other.to_us_msat
+            && self.spendable_msat == other.spendable_msat
+            && self.receivable_msat == other.receivable_msat
+            && self.htlc_in_count == other.htlc_in_count
+            && self.htlc_out_count == other.htlc_out_count
+            && self.htlc_in_msat == other.htlc_in_msat
+            && self.htlc_out_msat == other.htlc_out_msat
+    }
 }
 
 pub fn amount_msat(value: Option<&Value>) -> u64 {
@@ -57,10 +84,50 @@ impl ChannelSample {
             .get("short_channel_id")
             .and_then(Value::as_str)
             .map(str::to_owned);
+        let funding_outpoint = value
+            .get("funding_txid")
+            .and_then(Value::as_str)
+            .zip(value.get("funding_outnum").and_then(Value::as_u64))
+            .map(|(txid, outnum)| format!("{txid}:{outnum}"));
         let channel_key = channel_id
             .clone()
             .or_else(|| short_channel_id.clone())
+            .or_else(|| funding_outpoint.clone())
             .unwrap_or_else(|| format!("pending:{peer_id}:{index}"));
+        let mut aliases = Vec::new();
+        if let Some(value) = &channel_id {
+            aliases.push(ChannelAlias {
+                kind: "channel_id",
+                value: value.clone(),
+            });
+        }
+        if let Some(value) = &short_channel_id {
+            aliases.push(ChannelAlias {
+                kind: "short_channel_id",
+                value: value.clone(),
+            });
+        }
+        if let Some(value) = funding_outpoint {
+            aliases.push(ChannelAlias {
+                kind: "funding_outpoint",
+                value,
+            });
+        }
+        for (field, kind) in [("local", "local_alias"), ("remote", "remote_alias")] {
+            if let Some(alias) = value
+                .get("alias")
+                .or_else(|| value.get("aliases"))
+                .and_then(|aliases| aliases.get(field))
+                .and_then(Value::as_str)
+            {
+                if !aliases.iter().any(|item| item.value == alias) {
+                    aliases.push(ChannelAlias {
+                        kind,
+                        value: alias.to_owned(),
+                    });
+                }
+            }
+        }
         let mut htlc_in_count = 0u64;
         let mut htlc_out_count = 0u64;
         let mut htlc_in_msat = 0u64;
@@ -82,6 +149,7 @@ impl ChannelSample {
         }
         Self {
             channel_key,
+            aliases,
             channel_id,
             short_channel_id,
             peer_id,
@@ -118,6 +186,8 @@ pub struct RangeQuery {
     pub end: Option<u64>,
     #[serde(default)]
     pub channel: Option<String>,
+    #[serde(default)]
+    pub cursor: Option<u64>,
     #[serde(default = "default_limit")]
     pub limit: u64,
 }
@@ -134,6 +204,7 @@ impl RangeQuery {
                 start: values.first().and_then(Value::as_u64),
                 end: values.get(1).and_then(Value::as_u64),
                 channel: values.get(2).and_then(Value::as_str).map(str::to_owned),
+                cursor: values.get(4).and_then(Value::as_u64),
                 limit: values
                     .get(3)
                     .and_then(Value::as_u64)
@@ -158,6 +229,39 @@ impl RangeQuery {
             "limit must be between 1 and {MAX_LIMIT}"
         );
         Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SampleQuery {
+    #[serde(flatten)]
+    pub range: RangeQuery,
+    #[serde(default)]
+    pub interval: Option<u64>,
+}
+
+impl SampleQuery {
+    pub fn parse(value: Value) -> Result<Self> {
+        let query = if value.is_array() {
+            let interval = value
+                .as_array()
+                .and_then(|values| values.get(5))
+                .and_then(Value::as_u64);
+            Self {
+                range: RangeQuery::parse(value)?,
+                interval,
+            }
+        } else {
+            serde_json::from_value(value)?
+        };
+        query.range.validate()?;
+        if let Some(interval) = query.interval {
+            ensure!(
+                (60..=31_536_000).contains(&interval),
+                "interval must be between 60 seconds and 1 year"
+            );
+        }
+        Ok(query)
     }
 }
 
@@ -189,6 +293,7 @@ impl PairQuery {
                     start: values.first().and_then(Value::as_u64),
                     end: values.get(1).and_then(Value::as_u64),
                     channel: None,
+                    cursor: values.get(8).and_then(Value::as_u64),
                     limit: values
                         .get(7)
                         .and_then(Value::as_u64)
@@ -235,6 +340,7 @@ impl EventQuery {
                     start: values.first().and_then(Value::as_u64),
                     end: values.get(1).and_then(Value::as_u64),
                     channel: values.get(2).and_then(Value::as_str).map(str::to_owned),
+                    cursor: values.get(5).and_then(Value::as_u64),
                     limit: values
                         .get(4)
                         .and_then(Value::as_u64)
@@ -252,7 +358,7 @@ impl EventQuery {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelSample, PairQuery, RangeQuery};
+    use super::{ChannelSample, PairQuery, RangeQuery, SampleQuery};
     use serde_json::json;
 
     #[test]
@@ -260,6 +366,7 @@ mod tests {
         let sample = ChannelSample::from_value(
             &json!({
                 "peer_id": "peer", "channel_id": "full", "short_channel_id": "1x2x3",
+                "alias": {"local": "9x9x1", "remote": "9x9x2"},
                 "state": "CHANNELD_NORMAL", "peer_connected": true, "reestablished": true,
                 "total_msat": 1_000_000, "to_us_msat": 600_000,
                 "spendable_msat": {"msat": 590_000}, "receivable_msat": "390000msat",
@@ -271,6 +378,7 @@ mod tests {
             0,
         );
         assert_eq!(sample.channel_key, "full");
+        assert_eq!(sample.aliases.len(), 4);
         assert_eq!(sample.spendable_msat, 590_000);
         assert_eq!((sample.htlc_in_count, sample.htlc_out_count), (1, 1));
         assert_eq!(
@@ -284,5 +392,6 @@ mod tests {
         assert!(RangeQuery::parse(json!({"start": 20, "end": 10})).is_err());
         assert!(RangeQuery::parse(json!({"limit": 0})).is_err());
         assert!(PairQuery::parse(json!({"interval": 59})).is_err());
+        assert!(SampleQuery::parse(json!({"interval": 59})).is_err());
     }
 }
