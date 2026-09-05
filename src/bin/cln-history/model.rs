@@ -36,6 +36,23 @@ pub struct ChannelSample {
     pub htlc_out_count: u64,
     pub htlc_in_msat: u64,
     pub htlc_out_msat: u64,
+    pub blockheight: Option<u64>,
+    pub htlc_min_expiry: Option<u64>,
+    pub htlc_max_expiry: Option<u64>,
+    pub htlc_hooked_count: u64,
+    pub htlc_trimmed_count: u64,
+    pub max_accepted_htlcs: Option<u64>,
+    pub local_policy: ChannelPolicy,
+    pub remote_policy: ChannelPolicy,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ChannelPolicy {
+    pub fee_base_msat: Option<u64>,
+    pub fee_ppm: Option<u64>,
+    pub htlc_minimum_msat: Option<u64>,
+    pub htlc_maximum_msat: Option<u64>,
+    pub cltv_expiry_delta: Option<u64>,
 }
 
 impl PartialEq for ChannelSample {
@@ -55,6 +72,14 @@ impl PartialEq for ChannelSample {
             && self.htlc_out_count == other.htlc_out_count
             && self.htlc_in_msat == other.htlc_in_msat
             && self.htlc_out_msat == other.htlc_out_msat
+            && self.blockheight == other.blockheight
+            && self.htlc_min_expiry == other.htlc_min_expiry
+            && self.htlc_max_expiry == other.htlc_max_expiry
+            && self.htlc_hooked_count == other.htlc_hooked_count
+            && self.htlc_trimmed_count == other.htlc_trimmed_count
+            && self.max_accepted_htlcs == other.max_accepted_htlcs
+            && self.local_policy == other.local_policy
+            && self.remote_policy == other.remote_policy
     }
 }
 
@@ -70,7 +95,7 @@ pub fn amount_msat(value: Option<&Value>) -> u64 {
 }
 
 impl ChannelSample {
-    pub fn from_value(value: &Value, index: usize) -> Self {
+    pub fn from_value(value: &Value, index: usize, blockheight: Option<u64>) -> Self {
         let peer_id = value
             .get("peer_id")
             .and_then(Value::as_str)
@@ -132,6 +157,10 @@ impl ChannelSample {
         let mut htlc_out_count = 0u64;
         let mut htlc_in_msat = 0u64;
         let mut htlc_out_msat = 0u64;
+        let mut htlc_min_expiry = None;
+        let mut htlc_max_expiry = None;
+        let mut htlc_hooked_count = 0u64;
+        let mut htlc_trimmed_count = 0u64;
         for htlc in value
             .get("htlcs")
             .and_then(Value::as_array)
@@ -139,6 +168,18 @@ impl ChannelSample {
             .flatten()
         {
             let amount = amount_msat(htlc.get("amount_msat"));
+            if let Some(expiry) = htlc.get("expiry").and_then(Value::as_u64) {
+                htlc_min_expiry =
+                    Some(htlc_min_expiry.map_or(expiry, |current: u64| current.min(expiry)));
+                htlc_max_expiry =
+                    Some(htlc_max_expiry.map_or(expiry, |current: u64| current.max(expiry)));
+            }
+            if htlc.get("status").and_then(Value::as_str).is_some() {
+                htlc_hooked_count = htlc_hooked_count.saturating_add(1);
+            }
+            if htlc.get("local_trimmed").and_then(Value::as_bool) == Some(true) {
+                htlc_trimmed_count = htlc_trimmed_count.saturating_add(1);
+            }
             if htlc.get("direction").and_then(Value::as_str) == Some("in") {
                 htlc_in_count = htlc_in_count.saturating_add(1);
                 htlc_in_msat = htlc_in_msat.saturating_add(amount);
@@ -174,8 +215,53 @@ impl ChannelSample {
             htlc_out_count,
             htlc_in_msat,
             htlc_out_msat,
+            // Block height is only meaningful for interpreting pending HTLC
+            // expiries. Omitting it for idle channels keeps a new block from
+            // turning every polling pass into a channel change point.
+            blockheight: if htlc_in_count + htlc_out_count > 0 {
+                blockheight
+            } else {
+                None
+            },
+            htlc_min_expiry,
+            htlc_max_expiry,
+            htlc_hooked_count,
+            htlc_trimmed_count,
+            max_accepted_htlcs: value.get("max_accepted_htlcs").and_then(Value::as_u64),
+            local_policy: ChannelPolicy::from_value(
+                value
+                    .get("updates")
+                    .and_then(|updates| updates.get("local")),
+            ),
+            remote_policy: ChannelPolicy::from_value(
+                value
+                    .get("updates")
+                    .and_then(|updates| updates.get("remote")),
+            ),
         }
     }
+}
+
+impl ChannelPolicy {
+    fn from_value(value: Option<&Value>) -> Self {
+        Self {
+            fee_base_msat: value.and_then(|value| optional_amount_msat(value.get("fee_base_msat"))),
+            fee_ppm: value
+                .and_then(|value| value.get("fee_proportional_millionths"))
+                .and_then(Value::as_u64),
+            htlc_minimum_msat: value
+                .and_then(|value| optional_amount_msat(value.get("htlc_minimum_msat"))),
+            htlc_maximum_msat: value
+                .and_then(|value| optional_amount_msat(value.get("htlc_maximum_msat"))),
+            cltv_expiry_delta: value
+                .and_then(|value| value.get("cltv_expiry_delta"))
+                .and_then(Value::as_u64),
+        }
+    }
+}
+
+fn optional_amount_msat(value: Option<&Value>) -> Option<u64> {
+    value.map(|value| amount_msat(Some(value)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -332,6 +418,60 @@ pub struct EventQuery {
     pub event_type: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ProbeQuery {
+    #[serde(flatten)]
+    pub range: RangeQuery,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub destination: Option<String>,
+    #[serde(default)]
+    pub interval: Option<u64>,
+}
+
+impl ProbeQuery {
+    pub fn parse(value: Value) -> Result<Self> {
+        let query = if let Some(values) = value.as_array() {
+            Self {
+                range: RangeQuery {
+                    start: values.first().and_then(Value::as_u64),
+                    end: values.get(1).and_then(Value::as_u64),
+                    channel: values.get(2).and_then(Value::as_str).map(str::to_owned),
+                    cursor: values.get(6).and_then(Value::as_u64),
+                    limit: values
+                        .get(5)
+                        .and_then(Value::as_u64)
+                        .unwrap_or(DEFAULT_LIMIT),
+                },
+                status: values.get(3).and_then(Value::as_str).map(str::to_owned),
+                interval: values.get(4).and_then(Value::as_u64),
+                destination: None,
+            }
+        } else {
+            serde_json::from_value(value)
+                .map_err(|error| anyhow!("invalid cln-history-probes parameters: {error}"))?
+        };
+        query.range.validate()?;
+        if let Some(interval) = query.interval {
+            ensure!(
+                (60..=31_536_000).contains(&interval),
+                "interval must be between 60 seconds and 1 year"
+            );
+        }
+        if let Some(status) = query.status.as_deref() {
+            ensure!(
+                matches!(
+                    status,
+                    "destination_reached" | "route_failed" | "unexpected_settlement"
+                ),
+                "status must be destination_reached, route_failed, or unexpected_settlement"
+            );
+        }
+        Ok(query)
+    }
+}
+
 impl EventQuery {
     pub fn parse(value: Value) -> Result<Self> {
         let query = if let Some(values) = value.as_array() {
@@ -358,7 +498,7 @@ impl EventQuery {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelSample, PairQuery, RangeQuery, SampleQuery};
+    use super::{ChannelSample, PairQuery, ProbeQuery, RangeQuery, SampleQuery};
     use serde_json::json;
 
     #[test]
@@ -370,12 +510,24 @@ mod tests {
                 "state": "CHANNELD_NORMAL", "peer_connected": true, "reestablished": true,
                 "total_msat": 1_000_000, "to_us_msat": 600_000,
                 "spendable_msat": {"msat": 590_000}, "receivable_msat": "390000msat",
+                "max_accepted_htlcs": 30,
+                "updates": {
+                    "local": {"fee_base_msat": 1_000, "fee_proportional_millionths": 650,
+                        "htlc_minimum_msat": 1, "htlc_maximum_msat": 990_000,
+                        "cltv_expiry_delta": 34},
+                    "remote": {"fee_base_msat": 0, "fee_proportional_millionths": 40,
+                        "htlc_minimum_msat": 1_000, "htlc_maximum_msat": 900_000,
+                        "cltv_expiry_delta": 144}
+                },
                 "htlcs": [
-                    {"direction": "in", "amount_msat": 10_000},
-                    {"direction": "out", "amount_msat": "20000msat"}
+                    {"direction": "in", "amount_msat": 10_000, "expiry": 190,
+                        "status": "waiting on htlc_accepted"},
+                    {"direction": "out", "amount_msat": "20000msat", "expiry": 210,
+                        "local_trimmed": true}
                 ]
             }),
             0,
+            Some(180),
         );
         assert_eq!(sample.channel_key, "full");
         assert_eq!(sample.aliases.len(), 4);
@@ -385,6 +537,31 @@ mod tests {
             (sample.htlc_in_msat, sample.htlc_out_msat),
             (10_000, 20_000)
         );
+        assert_eq!(sample.blockheight, Some(180));
+        assert_eq!(
+            (sample.htlc_min_expiry, sample.htlc_max_expiry),
+            (Some(190), Some(210))
+        );
+        assert_eq!(
+            (sample.htlc_hooked_count, sample.htlc_trimmed_count),
+            (1, 1)
+        );
+        assert_eq!(sample.max_accepted_htlcs, Some(30));
+        assert_eq!(sample.local_policy.fee_ppm, Some(650));
+        assert_eq!(sample.remote_policy.cltv_expiry_delta, Some(144));
+    }
+
+    #[test]
+    fn validates_probe_query_filters_and_buckets() {
+        let query = ProbeQuery::parse(json!({
+            "start": 1_000, "end": 2_000, "channel": "1x2x3",
+            "status": "destination_reached", "interval": 300, "limit": 25
+        }))
+        .unwrap();
+        assert_eq!(query.range.channel.as_deref(), Some("1x2x3"));
+        assert_eq!(query.interval, Some(300));
+        assert!(ProbeQuery::parse(json!({"interval": 30})).is_err());
+        assert!(ProbeQuery::parse(json!({"status": "pending"})).is_err());
     }
 
     #[test]

@@ -8,7 +8,7 @@ use cln_plugin::{
     options::{DefaultIntegerConfigOption, DefaultStringConfigOption},
 };
 use db::HistoryDb;
-use model::{EventQuery, PairQuery, SampleQuery, now};
+use model::{EventQuery, PairQuery, ProbeQuery, SampleQuery, now};
 use serde_json::{Value, json};
 use std::{path::PathBuf, time::Duration};
 
@@ -72,6 +72,11 @@ async fn history_htlcs(plugin: Plugin<HistoryState>, params: Value) -> Result<Va
     plugin.state().db.htlc_samples(&query)
 }
 
+async fn history_probes(plugin: Plugin<HistoryState>, params: Value) -> Result<Value, Error> {
+    let query = ProbeQuery::parse(params)?;
+    plugin.state().db.probe_events(&query)
+}
+
 async fn on_notification(plugin: Plugin<HistoryState>, value: Value) -> Result<()> {
     let Some((topic, body)) = value.as_object().and_then(|object| object.iter().next()) else {
         return Ok(());
@@ -83,21 +88,44 @@ async fn on_notification(plugin: Plugin<HistoryState>, value: Value) -> Result<(
     match topic.as_str() {
         "channel_state_changed" => plugin.state().db.record_channel_event(now(), body)?,
         "forward_event" => plugin.state().db.record_forward_event(now(), body)?,
+        "connect" | "disconnect" => {
+            plugin
+                .state()
+                .db
+                .record_peer_connection_event(now(), topic, body)?
+        }
         _ => {}
     }
     Ok(())
 }
 
+async fn on_probe_notification(plugin: Plugin<HistoryState>, value: Value) -> Result<()> {
+    // cln-plugin currently includes both legacy top-level fields and the modern
+    // notification-name wrapper for custom notifications. Prefer the wrapper,
+    // but accept a direct payload so this remains compatible after the legacy
+    // fields are removed.
+    let body = value.get("zappit_probe_result").unwrap_or(&value);
+    plugin.state().db.record_probe_result(now(), body)
+}
+
 async fn collect_once(state: &HistoryState) {
     let collected_at = now();
-    let result = node_rpc::call(
+    let channels = node_rpc::call(
         &state.rpc_path,
         "listpeerchannels",
         json!({}),
         state.rpc_timeout,
-    )
-    .await
-    .and_then(|value| state.db.record_channel_snapshot(collected_at, &value));
+    );
+    let info = node_rpc::call(&state.rpc_path, "getinfo", json!({}), state.rpc_timeout);
+    let (channels, info) = tokio::join!(channels, info);
+    let blockheight = info
+        .ok()
+        .and_then(|value| value.get("blockheight").and_then(Value::as_u64));
+    let result = channels.and_then(|value| {
+        state
+            .db
+            .record_channel_snapshot_at_height(collected_at, &value, blockheight)
+    });
     if let Err(error) = result {
         log::warn!("cln-history snapshot failed: {error:#}");
         if let Err(record_error) = state.db.record_collection_failure(collected_at, &error) {
@@ -150,7 +178,17 @@ async fn main() -> Result<()> {
                 .description("Return channel lifecycle and state-transition events")
                 .usage("[start] [end] [channel] [event_type] [limit] [cursor]"),
         )
-        .subscribe("*", on_notification)
+        .rpcmethod_from_builder(
+            RpcMethodBuilder::new("cln-history-probes", history_probes)
+                .description("Return terminal route-liquidity probe observations and bounds")
+                .usage("[start] [end] [channel] [status] [interval] [limit] [cursor]"),
+        )
+        .subscribe("channel_state_changed", on_notification)
+        .subscribe("forward_event", on_notification)
+        .subscribe("connect", on_notification)
+        .subscribe("disconnect", on_notification)
+        .subscribe("zappit_probe_result", on_probe_notification)
+        .subscribe("shutdown", on_notification)
         .dynamic()
         .configure()
         .await?

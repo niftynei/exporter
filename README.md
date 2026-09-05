@@ -48,13 +48,23 @@ The plugin provides read-only dashboard RPCs:
   metrics automatically discovered by `cln-exporter` and exposed with the
   `cln_history_` prefix.
 - `cln-history-status`: database health, coverage, and row counts.
-- `cln-history-channels`: channel balance, connectivity, and availability
-  change points. The most recent point before the requested range is included
-  as a baseline. Set `interval` to return the last state in each time bucket.
-- `cln-history-pairs`: forwarding count, volume, fees, and effective ppm by
-  incoming/outgoing channel pair and requested time interval.
-- `cln-history-htlcs`: historical per-channel pending-HTLC counts and amounts.
-- `cln-history-events`: channel state changes, disappearance, and reappearance.
+- `cln-history-channels`: channel balance, connectivity, local/remote routing
+  policy, and availability change points. The most recent point before the
+  requested range is included as a baseline. Set `interval` to return the last
+  state in each time bucket.
+- `cln-history-pairs`: forwarding count, volume, fees, effective ppm, and local
+  failure code/reason by incoming/outgoing channel pair and requested time
+  interval. Failures rejected before an outgoing channel is selected use the
+  `unknown` outgoing identity.
+- `cln-history-htlcs`: historical per-channel pending-HTLC counts, amounts,
+  expiry range, accepted-slot limit, hook-waiting count, and trimmed count.
+- `cln-history-events`: exact peer connect/disconnect notifications plus channel
+  state changes, disappearance, and reappearance. Connection history starts
+  when this version of the plugin is deployed; it is not backfilled.
+- `cln-history-probes`: raw or time-bucketed terminal results emitted by the
+  optional `zappit-probe` plugin. Results include durable route identities,
+  observed liquidity bounds, and exact failure locations, but exclude payment
+  hashes, preimages, and failure onions.
 
 All query RPCs accept Unix-second `start` and `end` bounds plus an optional
 `limit` (10,000 by default, 50,000 maximum). List responses include
